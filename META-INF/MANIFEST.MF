@@ -1,0 +1,21 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: NSoft Workflow Visualizer
+Bundle-SymbolicName: org.nsoft.wf.visualizer
+Bundle-Version: 1.0.0.qualifier
+Bundle-Activator: org.nsoft.wf.visualizer.MyActivator
+Bundle-RequiredExecutionEnvironment: JavaSE-11
+Service-Component: OSGI-INF/component.xml
+
+Import-Package:
+ org.adempiere.webui.annotation,
+ org.adempiere.webui.component,
+ org.adempiere.webui.panel,
+ org.compiere.util,
+ org.osgi.framework;version="[1.8,2.0)",
+ org.zkoss.zk.ui,
+ org.zkoss.zk.ui.event,
+ org.zkoss.zk.ui.util,
+ org.zkoss.zul
+
+Export-Package: org.nsoft.wf.visualizer

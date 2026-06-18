@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             http://maven.apache.org/xsd/maven-4.0.0.xsd">
+   <modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.idempiere</groupId>
+		<artifactId>org.idempiere.parent</artifactId>
+		<version>${revision}</version>
+		<relativePath>../idempiere/org.idempiere.parent/pom.xml</relativePath>
+	</parent>
+
+    <groupId>org.nsoft</groupId>
+    <artifactId>org.nsoft.wf.visualizer</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>bundle</packaging>
+    <name>NSoft Workflow Visualizer</name>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <idempiere.version>10.0.0</idempiere.version>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.felix</groupId>
+                <artifactId>maven-bundle-plugin</artifactId>
+                <version>5.1.8</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <instructions>
+                        <Bundle-SymbolicName>org.nsoft.wf.visualizer</Bundle-SymbolicName>
+                        <Bundle-Activator>org.nsoft.wf.visualizer.MyActivator</Bundle-Activator>
+                        <Service-Component>OSGI-INF/component.xml</Service-Component>
+                        <Export-Package>org.nsoft.wf.visualizer</Export-Package>
+                        <Import-Package>
+                            org.adempiere.webui.annotation,
+                            org.adempiere.webui.component,
+                            org.adempiere.webui.panel,
+                            org.compiere.util,
+                            org.osgi.framework;version="[1.8,2.0)",
+                            org.zkoss.zk.ui,
+                            org.zkoss.zk.ui.event,
+                            org.zkoss.zk.ui.util,
+                            org.zkoss.zul
+                        </Import-Package>
+                        <!-- Include 2pack folder di dalam jar -->
+                        <Include-Resource>
+                            2pack=2pack,
+                            OSGI-INF=OSGI-INF
+                        </Include-Resource>
+                    </instructions>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
