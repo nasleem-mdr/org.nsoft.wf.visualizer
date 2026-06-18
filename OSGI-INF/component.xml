@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OSGI-INF/component.xml — Declarative Services component definition.
+
+  Mendaftarkan NSoftWFVisFactory sebagai service org.adempiere.webui.panel.IFormFactory
+  sehingga iDempiere dapat menemukan dan membuat instance WFVisualizerForm saat
+  form "org.nsoft.wf.visualizer.WFVisualizerForm" diminta dari menu/AD_Form.
+
+  Referensi: MANIFEST.MF -> Service-Component: OSGI-INF/component.xml
+             pom.xml      -> Include-Resource: OSGI-INF=OSGI-INF
+-->
+<scr:component xmlns:scr="http://www.osgi.org/xmlns/scr/v1.1.0"
+                name="org.nsoft.wf.visualizer.factory.NSoftWFVisFactory"
+                immediate="true">
+
+    <implementation class="org.nsoft.wf.visualizer.factory.NSoftWFVisFactory"/>
+
+    <!-- Naikkan ranking agar tidak tertimpa default form factory -->
+    <property name="service.ranking" type="Integer" value="100"/>
+
+    <service>
+        <provide interface="org.adempiere.webui.panel.IFormFactory"/>
+    </service>
+
+</scr:component>

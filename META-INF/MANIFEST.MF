@@ -4,10 +4,11 @@ Bundle-Name: NSoft Workflow Visualizer
 Bundle-SymbolicName: org.nsoft.wf.visualizer
 Bundle-Version: 1.0.0.qualifier
 Bundle-Activator: org.nsoft.wf.visualizer.MyActivator
-Bundle-RequiredExecutionEnvironment: JavaSE-11
+Bundle-RequiredExecutionEnvironment: JavaSE-17
 Service-Component: OSGI-INF/component.xml
 
 Import-Package:
+ org.adempiere.plugin.utils,
  org.adempiere.webui.annotation,
  org.adempiere.webui.component,
  org.adempiere.webui.panel,
@@ -18,4 +19,6 @@ Import-Package:
  org.zkoss.zk.ui.util,
  org.zkoss.zul
 
-Export-Package: org.nsoft.wf.visualizer
+Export-Package: org.nsoft.wf.visualizer,
+ org.nsoft.wf.visualizer.model,
+ org.nsoft.wf.visualizer.factory

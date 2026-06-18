@@ -20,11 +20,37 @@
     <properties>
         <maven.compiler.source>11</maven.compiler.source>
         <maven.compiler.target>11</maven.compiler.target>
-        <idempiere.version>10.0.0</idempiere.version>
+        <idempiere.version>13.0.0</idempiere.version>
     </properties>
 
     <build>
+        <sourceDirectory>src</sourceDirectory>
         <plugins>
+            <plugin>
+                <!-- Membungkus 2pack/WFVisualizer_2pack.xml menjadi 2Pack_<name>_<version>.zip
+                     di META-INF, sesuai skema penamaan yang dibaca oleh
+                     org.adempiere.plugin.utils.Incremental2PackActivator -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>package-2pack-zip</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <mkdir dir="${project.build.outputDirectory}/META-INF"/>
+                                <zip destfile="${project.build.outputDirectory}/META-INF/2Pack_org.nsoft.wf.visualizer_1.0.0.zip"
+                                     basedir="${project.basedir}/2pack"
+                                     includes="WFVisualizer_2pack.xml"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.felix</groupId>
                 <artifactId>maven-bundle-plugin</artifactId>
@@ -35,8 +61,9 @@
                         <Bundle-SymbolicName>org.nsoft.wf.visualizer</Bundle-SymbolicName>
                         <Bundle-Activator>org.nsoft.wf.visualizer.MyActivator</Bundle-Activator>
                         <Service-Component>OSGI-INF/component.xml</Service-Component>
-                        <Export-Package>org.nsoft.wf.visualizer</Export-Package>
+                        <Export-Package>org.nsoft.wf.visualizer,org.nsoft.wf.visualizer.model,org.nsoft.wf.visualizer.factory</Export-Package>
                         <Import-Package>
+                            org.adempiere.plugin.utils,
                             org.adempiere.webui.annotation,
                             org.adempiere.webui.component,
                             org.adempiere.webui.panel,
@@ -47,9 +74,11 @@
                             org.zkoss.zk.ui.util,
                             org.zkoss.zul
                         </Import-Package>
-                        <!-- Include 2pack folder di dalam jar -->
+                        <!-- 2Pack_*.zip (dihasilkan oleh maven-antrun-plugin di bawah)
+                             di-include ke META-INF agar Incremental2PackActivator
+                             dapat menemukannya saat bundle start. -->
                         <Include-Resource>
-                            2pack=2pack,
+                            META-INF=${project.build.outputDirectory}/META-INF,
                             OSGI-INF=OSGI-INF
                         </Include-Resource>
                     </instructions>

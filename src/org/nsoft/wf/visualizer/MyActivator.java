@@ -1,40 +1,29 @@
 package org.nsoft.wf.visualizer;
 
-import org.adempiere.webui.panel.IFormFactory;
-import org.compiere.Adempiere;
-import org.idempiere.osgi.bridge.Incremental2PackActivator;
-import org.nsoft.wf.visualizer.factory.NSoftWFVisFactory;
+import org.adempiere.plugin.utils.Incremental2PackActivator;
 import org.osgi.framework.BundleContext;
-import org.osgi.framework.ServiceRegistration;
 
 /**
  * MyActivator — Bundle activator + 2pack auto-installer.
  *
- * Extends Incremental2PackActivator sehingga 2pack XML di-install
- * otomatis saat bundle pertama kali aktif (seperti di org.nsoft.workflow.activities).
+ * Extends Incremental2PackActivator (org.adempiere.plugin.utils) sehingga
+ * 2pack zip yang ditempatkan di META-INF (dengan skema nama
+ * "2Pack_&lt;name&gt;_&lt;version&gt;.zip") di-install otomatis saat bundle pertama
+ * kali aktif.
+ *
+ * Catatan: registrasi service IFormFactory (NSoftWFVisFactory) dilakukan secara
+ * deklaratif via OSGI-INF/component.xml (Declarative Services), bukan secara
+ * manual di sini, untuk menghindari registrasi ganda.
  */
 public class MyActivator extends Incremental2PackActivator {
-
-    private ServiceRegistration<IFormFactory> formFactoryReg;
 
     @Override
     public void start(BundleContext context) throws Exception {
         super.start(context);
-
-        // Daftarkan IFormFactory
-        formFactoryReg = context.registerService(
-            IFormFactory.class,
-            new NSoftWFVisFactory(),
-            null
-        );
     }
 
     @Override
     public void stop(BundleContext context) throws Exception {
-        if (formFactoryReg != null) {
-            formFactoryReg.unregister();
-            formFactoryReg = null;
-        }
         super.stop(context);
     }
 
@@ -43,13 +32,17 @@ public class MyActivator extends Incremental2PackActivator {
     // ─────────────────────────────────────────────────────────────────────────
 
     @Override
-    protected String get2PackFolderPath() {
-        // Folder 2pack di dalam bundle jar
-        return "2pack";
+    public String getName() {
+        return "org.nsoft.wf.visualizer";
     }
 
     @Override
-    protected String getSystemName() {
-        return "org.nsoft.wf.visualizer";
+    public String getVersion() {
+        return "1.0.0";
+    }
+
+    @Override
+    public String getDescription() {
+        return "NSoft Workflow Visualizer — auto pack-in WFVisualizerForm AD_Form & AD_Menu";
     }
 }
