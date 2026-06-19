@@ -6,19 +6,22 @@ Bundle-Version: 1.0.0.qualifier
 Bundle-Activator: org.nsoft.wf.visualizer.MyActivator
 Bundle-RequiredExecutionEnvironment: JavaSE-17
 Service-Component: OSGI-INF/component.xml
-
-Import-Package:
+Require-Bundle: org.eclipse.core.runtime,
+ org.adempiere.base;bundle-version="13.0.0",
+ org.adempiere.ui.zk;bundle-version="13.0.0",
  org.adempiere.plugin.utils,
- org.adempiere.webui.annotation,
+ org.osgi.framework,
+ zk,
+ zkbind,
+ zkplus,
+ zul
+Import-Package: org.adempiere.webui.apps,
  org.adempiere.webui.component,
- org.adempiere.webui.panel,
- org.compiere.util,
- org.osgi.framework;version="[1.8,2.0)",
- org.zkoss.zk.ui,
- org.zkoss.zk.ui.event,
- org.zkoss.zk.ui.util,
- org.zkoss.zul
+ org.adempiere.webui.factory,
+ org.osgi.framework,
+ org.osgi.service.component.annotations
 
-Export-Package: org.nsoft.wf.visualizer,
+Export-Package:
+ org.nsoft.wf.visualizer,
  org.nsoft.wf.visualizer.model,
  org.nsoft.wf.visualizer.factory
