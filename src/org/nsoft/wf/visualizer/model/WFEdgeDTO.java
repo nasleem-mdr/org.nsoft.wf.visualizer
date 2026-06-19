@@ -1,16 +1,24 @@
 package org.nsoft.wf.visualizer.model;
 
 /**
- * WFEdgeDTO — transisi antar node dari AD_WF_NodeNext.
+ * DTO untuk transisi antar node (AD_WF_NodeNext).
  */
 public class WFEdgeDTO {
-    public int    edgeId;
-    public int    fromNodeId;
-    public int    toNodeId;
-    public String transitionCode; // AD_WF_NodeNext.TransitionCode (optional)
-    public String description;
 
-    // Untuk mode COMPARATIVE: apakah transisi ini benar-benar dilalui?
-    public boolean traversedInActual = false;
-    public int     traversalCount    = 0;
+    private int    adWFNodeNextID;
+    private int    adWFNodeID;       // source
+    private int    adWFNextID;       // target
+    private String description;
+
+    public WFEdgeDTO(int adWFNodeNextID, int adWFNodeID, int adWFNextID, String description) {
+        this.adWFNodeNextID = adWFNodeNextID;
+        this.adWFNodeID     = adWFNodeID;
+        this.adWFNextID     = adWFNextID;
+        this.description    = description;
+    }
+
+    public int    getAdWFNodeNextID() { return adWFNodeNextID; }
+    public int    getAdWFNodeID()     { return adWFNodeID; }
+    public int    getAdWFNextID()     { return adWFNextID; }
+    public String getDescription()    { return description; }
 }
