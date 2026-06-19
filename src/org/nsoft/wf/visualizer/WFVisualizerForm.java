@@ -1,612 +1,614 @@
 package org.nsoft.wf.visualizer;
 
 import org.nsoft.wf.visualizer.model.*;
-
-import java.sql.*;
-import java.text.SimpleDateFormat;
-import java.util.*;
-import java.util.logging.Level;
-
-import org.adempiere.webui.component.*;
-import org.adempiere.webui.panel.ADForm;
-import org.compiere.util.*;
-import org.zkoss.zk.ui.Component;
 import org.zkoss.zk.ui.event.*;
 import org.zkoss.zk.ui.util.Clients;
 import org.zkoss.zul.*;
+import org.adempiere.webui.component.*;
+import org.adempiere.webui.panel.ADForm;
+
+import java.util.*;
 
 /**
- * WFVisualizerForm — Main ZK Form untuk Workflow Visualizer.
+ * WFVisualizerForm — main ZK form untuk org.nsoft.wf.visualizer.
  *
- * Layout:
- * ┌─────────────────────────────────────────────────────────────────────┐
- * │  NORTH: Toolbar parameter (Workflow, Mode, Filter)                  │
- * ├─────────────────────────────────────────────────────────────────────┤
- * │  CENTER: Visualization area (vis.js / Chart.js rendered via Html)   │
- * └─────────────────────────────────────────────────────────────────────┘
+ * Mendukung 4 mode:
+ *   FLOW        — vis.Network (definisi murni)
+ *   COMPARATIVE — vis.Network (definisi + overlay aktual)
+ *   TIMELINE    — vis.Timeline (Gantt per instance)
+ *   STAT        — Chart.js (bar + pie + throughput)
  *
- * Semua rendering dilakukan client-side via injected JavaScript.
- * Java side hanya menyiapkan JSON data dan memanggil Clients.evalJavaScript().
+ * Struktur UI (Borderlayout):
+ * ┌──────────────────────────────────────────────────────────────┐
+ * │ NORTH: row1=workflow/instance picker + mode tabs + btn       │
+ * │        row2=opsi per-mode (conditional)                      │
+ * ├──────────────────────────────────────────────────────────────┤
+ * │ CENTER: div#wfVisContainer  (semua renderer di sini)         │
+ * ├──────────────────────────────────────────────────────────────┤
+ * │ SOUTH: statusbar + legend dinamis                            │
+ * └──────────────────────────────────────────────────────────────┘
  */
-@org.adempiere.webui.annotation.Form(name = "org.nsoft.wf.visualizer.WFVisualizerForm")
-public class WFVisualizerForm extends ADForm {
+public class WFVisualizerForm extends ADForm implements EventListener<Event> {
 
-    private static final CLogger log = CLogger.getCLogger(WFVisualizerForm.class);
+    private static final long serialVersionUID = 1L;
 
-    // ── Data ──────────────────────────────────────────────────────────────────
-    private final WFDataProvider   dataProvider = new WFDataProvider();
-    private final WFVisJsonBuilder jsonBuilder  = new WFVisJsonBuilder();
+    // ── Services ──────────────────────────────────────────────────────────────
+    private final WFDataProvider          dataProvider   = new WFDataProvider();
+    private final WFFlowJsonBuilder       flowBuilder    = new WFFlowJsonBuilder();
+    private final WFComparativeJsonBuilder compBuilder   = new WFComparativeJsonBuilder();
+    private final WFTimelineJsonBuilder   timelineBuilder = new WFTimelineJsonBuilder();
+    private final WFStatJsonBuilder       statBuilder    = new WFStatJsonBuilder();
 
-    // ── Parameter state ───────────────────────────────────────────────────────
-    private int      selectedWorkflowId = -1;
-    private int      selectedProcessId  = -1;
-    private WFVisMode visMode           = WFVisMode.FLOW;
-    private WFVisJsonBuilder.ChartType chartType = WFVisJsonBuilder.ChartType.BAR;
-    private Timestamp dateFrom          = null;
-    private Timestamp dateTo            = null;
-    private boolean  highlightBottleneck = true;
-    private boolean  showDefinition     = true;
-    private boolean  showActual         = true;
+    // ── State ─────────────────────────────────────────────────────────────────
+    private WFVisMode currentMode         = WFVisMode.FLOW;
+    private int       adWorkflowID        = 0;
+    private int       adWFProcessID       = 0;       // 0 = semua
+    private boolean   showDefinition      = true;
+    private boolean   showActual          = true;
+    private boolean   highlightBottleneck = false;
 
-    // ── ZK Components ─────────────────────────────────────────────────────────
-    private Listbox  lbWorkflow;
-    private Listbox  lbProcess;
-    private Listbox  lbMode;
-    private Listbox  lbChartType;
-    private Datebox  dbFrom;
-    private Datebox  dbTo;
-    private Checkbox cbHighlight;
-    private Checkbox cbShowDef;
-    private Checkbox cbShowActual;
-    private Html     visContainer;     // tempat vis.js di-render
-    private Label    lblStatus;
+    // ── UI Components ─────────────────────────────────────────────────────────
+    private Combobox  cbWorkflow;
+    private Combobox  cbProcess;
+    private Button    btnFlow, btnComparative, btnTimeline, btnStat;
+    private Div       optionsRow;           // row2 — isi berubah per mode
+    private Checkbox  chkDefinition, chkActual, chkBottleneck;
+    private Label     lblStatus;
+    private Div       legendRow;
+    private Div       visContainer;
 
-    // ── Canvas ID (unik per form instance) ───────────────────────────────────
-    private final String canvasId = "wfvis_" + System.currentTimeMillis();
+    // ─────────────────────────────────────────────────────────────────────────
+    // Init
+    // ─────────────────────────────────────────────────────────────────────────
 
     @Override
-    protected void doCreateLayoutCenterPanel(Component parent) {
-        parent.setSclass("wfvis-form");
-
-        Borderlayout layout = new Borderlayout();
-        layout.setParent(parent);
-        layout.setVflex("1");
-        layout.setHflex("1");
-
-        buildNorthPanel(layout);
-        buildCenterPanel(layout);
+    protected void initForm() {
+        this.setSclass("wf-visualizer-form");
+        buildUI();
+        loadWorkflowCombo();
+        injectLibsAndCss();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // NORTH PANEL — Parameter toolbar
+    // UI Builder
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void buildNorthPanel(Borderlayout layout) {
+    private void buildUI() {
+        Borderlayout bl = new Borderlayout();
+        bl.setHeight("100%");
+        bl.setWidth("100%");
+        this.appendChild(bl);
+
+        // ── NORTH ─────────────────────────────────────────────────────────
         North north = new North();
-        north.setParent(layout);
-        north.setCollapsible(true);
-        north.setBorder("normal");
+        north.setSclass("wf-vis-north");
+        north.setCollapsible(false);
+        bl.appendChild(north);
 
-        Vlayout vl = new Vlayout();
-        vl.setParent(north);
-        vl.setSclass("wfvis-north");
+        Vlayout northInner = new Vlayout();
+        northInner.setSclass("wf-vis-north-inner");
+        north.appendChild(northInner);
 
-        // ── Row 1: Workflow + Mode + ChartType ────────────────────────────────
+        // Row 1: picker + mode tabs + btn visualisasi
         Hlayout row1 = new Hlayout();
-        row1.setParent(vl);
-        row1.setSclass("wfvis-toolbar-row");
+        row1.setSclass("wf-vis-row");
+        northInner.appendChild(row1);
 
-        // Workflow lookup
-        new Label("Workflow:").setParent(row1);
-        lbWorkflow = new Listbox();
-        lbWorkflow.setParent(row1);
-        lbWorkflow.setMold("select");
-        lbWorkflow.setWidth("200px");
-        populateWorkflowDropdown();
-        lbWorkflow.addEventListener(Events.ON_SELECT, e -> onWorkflowSelected());
+        row1.appendChild(label("Workflow:"));
+        cbWorkflow = new Combobox();
+        cbWorkflow.setReadonly(true);
+        cbWorkflow.setWidth("260px");
+        cbWorkflow.addEventListener(Events.ON_SELECT, this);
+        row1.appendChild(cbWorkflow);
 
-        // Mode
-        new Label("Mode:").setParent(row1);
-        lbMode = new Listbox();
-        lbMode.setParent(row1);
-        lbMode.setMold("select");
-        lbMode.setWidth("160px");
-        for (WFVisMode m : WFVisMode.values()) {
-            Listitem li = new Listitem(m.getDisplayName(), m.name());
-            li.setParent(lbMode);
-        }
-        lbMode.setSelectedIndex(0);
-        lbMode.addEventListener(Events.ON_SELECT, e -> onModeChanged());
+        row1.appendChild(label("Instance:"));
+        cbProcess = new Combobox();
+        cbProcess.setReadonly(true);
+        cbProcess.setWidth("230px");
+        cbProcess.addEventListener(Events.ON_SELECT, this);
+        row1.appendChild(cbProcess);
 
-        // Chart type (hanya visible saat STAT)
-        new Label("Chart:").setParent(row1);
-        lbChartType = new Listbox();
-        lbChartType.setParent(row1);
-        lbChartType.setMold("select");
-        lbChartType.setWidth("100px");
-        lbChartType.setVisible(false);
-        for (WFVisJsonBuilder.ChartType ct : WFVisJsonBuilder.ChartType.values()) {
-            Listitem li = new Listitem(ct.name(), ct.name());
-            li.setParent(lbChartType);
-        }
-        lbChartType.setSelectedIndex(0);
-        lbChartType.addEventListener(Events.ON_SELECT, e -> {
-            Listitem sel = lbChartType.getSelectedItem();
-            if (sel != null) chartType = WFVisJsonBuilder.ChartType.valueOf((String) sel.getValue());
-        });
+        // Mode tabs
+        Div tabs = new Div();
+        tabs.setSclass("wf-vis-tabs");
+        btnFlow        = modeBtn("Flow",        WFVisMode.FLOW,        tabs);
+        btnComparative = modeBtn("Comparative", WFVisMode.COMPARATIVE, tabs);
+        btnTimeline    = modeBtn("Timeline",    WFVisMode.TIMELINE,    tabs);
+        btnStat        = modeBtn("Statistik",   WFVisMode.STAT,        tabs);
+        row1.appendChild(tabs);
 
-        // ── Row 2: Process filter + Date range + Checkboxes ───────────────────
-        Hlayout row2 = new Hlayout();
-        row2.setParent(vl);
-        row2.setSclass("wfvis-toolbar-row");
+        Button btnVisualize = new Button("▶ Visualisasi");
+        btnVisualize.setId("btnVisualize");
+        btnVisualize.setSclass("wf-vis-btn-run");
+        btnVisualize.addEventListener(Events.ON_CLICK, this);
+        row1.appendChild(btnVisualize);
 
-        new Label("Process:").setParent(row2);
-        lbProcess = new Listbox();
-        lbProcess.setParent(row2);
-        lbProcess.setMold("select");
-        lbProcess.setWidth("180px");
-        lbProcess.appendChild(new Listitem("(Semua)", "-1"));
-        lbProcess.setSelectedIndex(0);
-        lbProcess.addEventListener(Events.ON_SELECT, e -> {
-            Listitem sel = lbProcess.getSelectedItem();
-            selectedProcessId = sel != null ? Integer.parseInt((String) sel.getValue()) : -1;
-        });
+        // Row 2: opsi dinamis (akan di-refresh saat mode berubah)
+        optionsRow = new Div();
+        optionsRow.setSclass("wf-vis-options-row");
+        northInner.appendChild(optionsRow);
+        buildOptionsForMode(currentMode);
 
-        new Label("Dari:").setParent(row2);
-        dbFrom = new Datebox();
-        dbFrom.setParent(row2);
-        dbFrom.setWidth("120px");
-        dbFrom.setFormat("dd/MM/yyyy");
-
-        new Label("s/d:").setParent(row2);
-        dbTo = new Datebox();
-        dbTo.setParent(row2);
-        dbTo.setWidth("120px");
-        dbTo.setFormat("dd/MM/yyyy");
-
-        // Checkboxes
-        cbHighlight = new Checkbox("Highlight Bottleneck");
-        cbHighlight.setParent(row2);
-        cbHighlight.setChecked(true);
-        cbHighlight.addEventListener(Events.ON_CHECK, e ->
-            highlightBottleneck = cbHighlight.isChecked());
-
-        cbShowDef = new Checkbox("Definisi");
-        cbShowDef.setParent(row2);
-        cbShowDef.setChecked(true);
-        cbShowDef.setVisible(false);
-        cbShowDef.addEventListener(Events.ON_CHECK, e ->
-            showDefinition = cbShowDef.isChecked());
-
-        cbShowActual = new Checkbox("Aktual");
-        cbShowActual.setParent(row2);
-        cbShowActual.setChecked(true);
-        cbShowActual.setVisible(false);
-        cbShowActual.addEventListener(Events.ON_CHECK, e ->
-            showActual = cbShowActual.isChecked());
-
-        // ── Row 3: Action buttons ──────────────────────────────────────────────
-        Hlayout row3 = new Hlayout();
-        row3.setParent(vl);
-        row3.setSclass("wfvis-toolbar-row");
-
-        Button btnVisualize = new Button("Visualisasi");
-        btnVisualize.setParent(row3);
-        btnVisualize.setSclass("wfvis-btn-primary");
-        btnVisualize.setImage("/images/zoom16.png");
-        btnVisualize.addEventListener(Events.ON_CLICK, e -> doVisualize());
-
-        Button btnExport = new Button("Export PNG");
-        btnExport.setParent(row3);
-        btnExport.setSclass("wfvis-btn-secondary");
-        btnExport.addEventListener(Events.ON_CLICK, e ->
-            Clients.evalJavaScript("wfVisExportPng('" + canvasId + "')"));
-
-        Button btnFitView = new Button("Fit View");
-        btnFitView.setParent(row3);
-        btnFitView.addEventListener(Events.ON_CLICK, e ->
-            Clients.evalJavaScript("wfVisFitView('" + canvasId + "')"));
-
-        lblStatus = new Label("");
-        lblStatus.setParent(row3);
-        lblStatus.setSclass("wfvis-status");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // CENTER PANEL — Visualization container
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private void buildCenterPanel(Borderlayout layout) {
+        // ── CENTER ────────────────────────────────────────────────────────
         Center center = new Center();
-        center.setParent(layout);
-        center.setBorder("none");
-        center.setAutoscroll(true);
+        center.setFlex(true);
+        bl.appendChild(center);
 
-        // Html component sebagai container vis.js
-        // Style diset via CSS class, bukan inline
-        visContainer = new Html();
-        visContainer.setParent(center);
-        visContainer.setSclass("wfvis-container");
-        visContainer.setContent(buildInitialHtml());
+        visContainer = new Div();
+        visContainer.setId("wfVisContainer");
+        visContainer.setSclass("wf-vis-canvas");
+        visContainer.setStyle("width:100%;height:100%;min-height:500px;position:relative;");
+        center.appendChild(visContainer);
 
-        // Inject CSS & library loader script
-        Clients.evalJavaScript(buildLibraryLoaderScript());
+        // ── SOUTH ─────────────────────────────────────────────────────────
+        South south = new South();
+        south.setSclass("wf-vis-south");
+        south.setHeight("30px");
+        bl.appendChild(south);
+
+        Hlayout southRow = new Hlayout();
+        southRow.setSclass("wf-vis-south-row");
+        south.appendChild(southRow);
+
+        lblStatus = new Label("Pilih workflow untuk memulai.");
+        lblStatus.setSclass("wf-vis-status");
+        southRow.appendChild(lblStatus);
+
+        legendRow = new Div();
+        legendRow.setSclass("wf-vis-legend");
+        southRow.appendChild(legendRow);
+        buildLegendForMode(currentMode);
+
+        // Aktifkan tombol mode default
+        updateModeTabStyle();
+    }
+
+    /** Bangun area opsi sesuai mode aktif */
+    private void buildOptionsForMode(WFVisMode mode) {
+        optionsRow.getChildren().clear();
+
+        if (mode == WFVisMode.COMPARATIVE) {
+            Hlayout hl = new Hlayout();
+            hl.setSclass("wf-vis-row wf-vis-subopts");
+            optionsRow.appendChild(hl);
+
+            chkDefinition = new Checkbox("Tampilkan Definisi");
+            chkDefinition.setChecked(showDefinition);
+            chkDefinition.addEventListener(Events.ON_CHECK, this);
+            hl.appendChild(chkDefinition);
+
+            chkActual = new Checkbox("Tampilkan Aktual");
+            chkActual.setChecked(showActual);
+            chkActual.addEventListener(Events.ON_CHECK, this);
+            hl.appendChild(chkActual);
+
+            chkBottleneck = new Checkbox("Highlight Bottleneck");
+            chkBottleneck.setChecked(highlightBottleneck);
+            chkBottleneck.addEventListener(Events.ON_CHECK, this);
+            hl.appendChild(chkBottleneck);
+        }
+        // FLOW, TIMELINE, STAT — tidak ada opsi tambahan saat ini
+    }
+
+    /** Bangun legend sesuai mode aktif */
+    private void buildLegendForMode(WFVisMode mode) {
+        legendRow.getChildren().clear();
+        if (mode == WFVisMode.FLOW || mode == WFVisMode.COMPARATIVE) {
+            legendRow.appendChild(legendDot("#4CAF50", "Start"));
+            legendRow.appendChild(legendDot("#F44336", "End"));
+            legendRow.appendChild(legendDot("#2196F3", "User Choice"));
+            legendRow.appendChild(legendDot("#FF9800", "Wait"));
+            if (mode == WFVisMode.COMPARATIVE) {
+                legendRow.appendChild(legendDot("#66BB6A", "Selesai"));
+                legendRow.appendChild(legendDot("#FFA726", "Running"));
+                legendRow.appendChild(legendDot("#EF5350", "Gagal"));
+                legendRow.appendChild(legendDot("#D32F2F", "Bottleneck"));
+            }
+        } else if (mode == WFVisMode.TIMELINE) {
+            legendRow.appendChild(legendDot("#66BB6A", "Selesai"));
+            legendRow.appendChild(legendDot("#FFA726", "Berjalan"));
+            legendRow.appendChild(legendDot("#EF5350", "Aborted"));
+        } else if (mode == WFVisMode.STAT) {
+            legendRow.appendChild(legendDot("#66BB6A", "Completed"));
+            legendRow.appendChild(legendDot("#FFA726", "Running"));
+            legendRow.appendChild(legendDot("#EF5350", "Aborted"));
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // EVENT HANDLERS
+    // Data Loading
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void onWorkflowSelected() {
-        Listitem sel = lbWorkflow.getSelectedItem();
-        if (sel == null) return;
-        selectedWorkflowId = (int) sel.getValue();
-        selectedProcessId  = -1;
-        populateProcessDropdown();
+    private void loadWorkflowCombo() {
+        cbWorkflow.getItems().clear();
+        Comboitem empty = new Comboitem("-- Pilih Workflow --");
+        empty.setValue(0);
+        cbWorkflow.appendChild(empty);
+        dataProvider.getWorkflowList().forEach((id, name) -> {
+            Comboitem item = new Comboitem(name);
+            item.setValue(id);
+            cbWorkflow.appendChild(item);
+        });
+        cbWorkflow.setSelectedIndex(0);
     }
 
-    private void onModeChanged() {
-        Listitem sel = lbMode.getSelectedItem();
-        if (sel == null) return;
-        visMode = WFVisMode.fromString((String) sel.getValue());
-
-        boolean isComparative = visMode == WFVisMode.COMPARATIVE;
-        boolean isStat        = visMode == WFVisMode.STAT;
-
-        lbChartType.setVisible(isStat);
-        cbShowDef.setVisible(isComparative);
-        cbShowActual.setVisible(isComparative);
-        cbHighlight.setVisible(isComparative || isStat);
+    private void loadProcessCombo(int workflowID) {
+        cbProcess.getItems().clear();
+        Comboitem all = new Comboitem("(Semua Instance)");
+        all.setValue(0);
+        cbProcess.appendChild(all);
+        dataProvider.getProcessList(workflowID).forEach((id, label) -> {
+            Comboitem item = new Comboitem(label);
+            item.setValue(id);
+            cbProcess.appendChild(item);
+        });
+        cbProcess.setSelectedIndex(0);
+        adWFProcessID = 0;
     }
 
-    /** Main visualize action — dispatch ke renderer yang sesuai */
-    private void doVisualize() {
-        if (selectedWorkflowId <= 0) {
-            showStatus("⚠ Pilih workflow terlebih dahulu", "error");
+    // ─────────────────────────────────────────────────────────────────────────
+    // Render dispatcher
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private void doRender() {
+        if (adWorkflowID <= 0) {
+            lblStatus.setValue("Pilih workflow terlebih dahulu.");
             return;
         }
+        lblStatus.setValue("Memuat data...");
 
-        // Baca filter tanggal
-        dateFrom = dbFrom.getValue() != null ? new Timestamp(dbFrom.getValue().getTime()) : null;
-        dateTo   = dbTo.getValue()   != null ? new Timestamp(dbTo.getValue().getTime())   : null;
-
-        showStatus("Memuat data...", "info");
-
-        try {
-            switch (visMode) {
-                case FLOW:        renderFlow();        break;
-                case COMPARATIVE: renderComparative(); break;
-                case TIMELINE:    renderTimeline();    break;
-                case STAT:        renderStat();        break;
-            }
-        } catch (Exception ex) {
-            log.log(Level.SEVERE, "Visualization failed", ex);
-            showStatus("❌ Error: " + ex.getMessage(), "error");
+        switch (currentMode) {
+            case FLOW:        renderFlow();        break;
+            case COMPARATIVE: renderComparative(); break;
+            case TIMELINE:    renderTimeline();    break;
+            case STAT:        renderStat();        break;
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // RENDERERS
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── FLOW ─────────────────────────────────────────────────────────────────
 
     private void renderFlow() {
-        List<WFNodeDTO> nodes = dataProvider.getNodes(selectedWorkflowId);
-        List<WFEdgeDTO> edges = dataProvider.getEdges(selectedWorkflowId);
-        String json = jsonBuilder.buildFlowJson(nodes, edges);
+        List<WFNodeDTO> nodes = dataProvider.getNodes(adWorkflowID);
+        List<WFEdgeDTO> edges = dataProvider.getEdges(adWorkflowID);
+        String json = flowBuilder.build(nodes, edges);
 
-        String js = String.format("""
-            wfVisRenderNetwork('%s', %s, {
-                layout: { hierarchical: { enabled: true, direction: 'UD', sortMethod: 'directed' } },
-                physics: { enabled: false },
-                interaction: { hover: true, tooltipDelay: 200 }
-            });
-            """, canvasId, json);
-        Clients.evalJavaScript(js);
-        showStatus("✓ Flow diagram: " + nodes.size() + " node, " + edges.size() + " edge", "ok");
+        Clients.evalJavaScript(
+            "(function(){" +
+            "  function r(){" +
+            "    var c=document.getElementById('wfVisContainer');" +
+            "    if(!c||typeof vis==='undefined'){setTimeout(r,300);return;}" +
+            "    var d=" + json + ";" +
+            "    var n=new vis.DataSet(d.nodes);" +
+            "    var e=new vis.DataSet(d.edges);" +
+            "    var opt={" +
+            "      layout:{hierarchical:{enabled:true,direction:'LR',sortMethod:'directed',levelSeparation:200}}," +
+            "      physics:{enabled:false}," +
+            "      interaction:{hover:true,tooltipDelay:150,navigationButtons:true,keyboard:true}," +
+            "      nodes:{font:{size:13,color:'#ECEFF1'},borderWidth:2,shadow:{enabled:true,size:5}}," +
+            "      edges:{smooth:{type:'cubicBezier',forceDirection:'horizontal'},arrows:'to'}" +
+            "    };" +
+            "    if(window._wfNet){window._wfNet.destroy();}" +
+            "    window._wfNet=new vis.Network(c,{nodes:n,edges:e},opt);" +
+            "    window._wfNet.once('stabilized',function(){" +
+            "      window._wfNet.fit({animation:{duration:500,easingFunction:'easeInOutQuad'}});" +
+            "    });" +
+            "  } r();" +
+            "})();"
+        );
+
+        lblStatus.setValue("Flow Diagram: " + nodes.size() + " node, " + edges.size() + " edge.");
     }
+
+    // ── COMPARATIVE ───────────────────────────────────────────────────────────
 
     private void renderComparative() {
-        List<WFNodeDTO>      defNodes     = dataProvider.getNodes(selectedWorkflowId);
-        List<WFEdgeDTO>      defEdges     = dataProvider.getEdges(selectedWorkflowId);
-        Map<Integer, WFNodeDTO> statsMap  = dataProvider.getNodeStatistics(selectedWorkflowId, dateFrom, dateTo);
-        Map<String, Integer> traversalMap = dataProvider.getEdgeTraversalCounts(selectedWorkflowId, dateFrom, dateTo);
+        List<WFNodeDTO>    nodes     = dataProvider.getNodes(adWorkflowID);
+        List<WFEdgeDTO>    edges     = dataProvider.getEdges(adWorkflowID);
+        List<WFProcessDTO> processes = dataProvider.getProcesses(adWorkflowID, adWFProcessID, null, null);
+        processes.forEach(dataProvider::loadActivities);
 
-        String json = jsonBuilder.buildComparativeJson(
-            defNodes, defEdges, statsMap, traversalMap, highlightBottleneck);
+        String json = compBuilder.build(nodes, edges, processes, showDefinition, showActual, highlightBottleneck);
 
-        // Keterangan layer di dalam tooltip
-        String js = String.format("""
-            wfVisRenderNetwork('%s', %s, {
-                groups: {
-                    definition: { color: { background: '#1565C0', border: '#0D47A1' } },
-                    actual:     { color: { background: '#E65100', border: '#BF360C' } }
-                },
-                physics: { enabled: true, stabilization: { iterations: 150 } },
-                interaction: { hover: true, tooltipDelay: 200 },
-                layout: { randomSeed: 42 }
-            });
-            wfVisAddLegend('%s', [
-                { color: '#1565C0', label: 'Definisi Workflow' },
-                { color: '#E65100', label: 'Eksekusi Aktual' },
-                { color: '#BDBDBD', label: 'Bridge (definisi ↔ aktual)' },
-                { color: '#FF1744', label: 'Bottleneck Node' }
-            ]);
-            """, canvasId, json, canvasId);
-        Clients.evalJavaScript(js);
+        Clients.evalJavaScript(
+            "(function(){" +
+            "  function r(){" +
+            "    var c=document.getElementById('wfVisContainer');" +
+            "    if(!c||typeof vis==='undefined'){setTimeout(r,300);return;}" +
+            "    var d=" + json + ";" +
+            "    var n=new vis.DataSet(d.nodes);" +
+            "    var e=new vis.DataSet(d.edges);" +
+            "    var opt={" +
+            "      layout:{hierarchical:{enabled:true,direction:'LR',sortMethod:'directed',levelSeparation:200}}," +
+            "      physics:{enabled:false}," +
+            "      interaction:{hover:true,tooltipDelay:150,navigationButtons:true,keyboard:true}," +
+            "      nodes:{font:{size:13,color:'#ECEFF1'},borderWidth:2,shadow:{enabled:true,size:5}}," +
+            "      edges:{smooth:{type:'cubicBezier',forceDirection:'horizontal'},arrows:'to'}" +
+            "    };" +
+            "    if(window._wfNet){window._wfNet.destroy();}" +
+            "    window._wfNet=new vis.Network(c,{nodes:n,edges:e},opt);" +
+            "    window._wfNet.once('stabilized',function(){" +
+            "      window._wfNet.fit({animation:{duration:500,easingFunction:'easeInOutQuad'}});" +
+            "    });" +
+            "    console.log('[WFVis] Comparative: '+d.meta.processCount+' proses, bottleneck='+d.meta.bottleneckNodeID);" +
+            "  } r();" +
+            "})();"
+        );
 
-        long activeNodes = statsMap.values().stream().filter(n -> n.totalExecutions > 0).count();
-        showStatus(String.format("✓ Comparative: %d def-node | %d node aktual | %d edge dilalui",
-            defNodes.size(), activeNodes, traversalMap.size()), "ok");
+        lblStatus.setValue(String.format("Comparative: %d node, %d instance dimuat.", nodes.size(), processes.size()));
     }
+
+    // ── TIMELINE ──────────────────────────────────────────────────────────────
 
     private void renderTimeline() {
-        List<WFProcessDTO>  processes  = dataProvider.getProcesses(
-            selectedWorkflowId, selectedProcessId, dateFrom, dateTo, 100);
-        List<WFActivityDTO> activities = dataProvider.getActivities(
-            selectedWorkflowId, selectedProcessId, dateFrom, dateTo);
+        List<WFProcessDTO> processes = dataProvider.getProcesses(adWorkflowID, adWFProcessID, null, null);
+        processes.forEach(dataProvider::loadActivities);
 
-        String json = jsonBuilder.buildTimelineJson(processes, activities);
+        String json = timelineBuilder.build(processes);
 
-        String js = String.format("""
-            wfVisRenderTimeline('%s', %s, {
-                stack: true,
-                showMajorLabels: true,
-                showMinorLabels: true,
-                orientation: { axis: 'top' },
-                zoomMin: 60000,
-                zoomMax: 31536000000
-            });
-            """, canvasId, json);
-        Clients.evalJavaScript(js);
-        showStatus("✓ Timeline: " + processes.size() + " proses, " + activities.size() + " aktivitas", "ok");
+        Clients.evalJavaScript(
+            "(function(){" +
+            "  function r(){" +
+            "    var c=document.getElementById('wfVisContainer');" +
+            "    if(!c||typeof vis==='undefined'){setTimeout(r,300);return;}" +
+            "    var d=" + json + ";" +
+            "    var groups=new vis.DataSet(d.groups);" +
+            "    var items=new vis.DataSet(d.items);" +
+            "    if(window._wfTimeline){window._wfTimeline.destroy();}" +
+            "    window._wfTimeline=new vis.Timeline(c,items,groups,d.options);" +
+            "    window._wfTimeline.fit();" +
+            "  } r();" +
+            "})();"
+        );
+
+        lblStatus.setValue("Timeline: " + processes.size() + " instance dimuat.");
     }
+
+    // ── STAT ──────────────────────────────────────────────────────────────────
 
     private void renderStat() {
-        Map<Integer, WFNodeDTO> statsMap = dataProvider.getNodeStatistics(
-            selectedWorkflowId, dateFrom, dateTo);
+        List<WFProcessDTO> processes = dataProvider.getProcesses(adWorkflowID, adWFProcessID, null, null);
+        processes.forEach(dataProvider::loadActivities);
 
-        String json = jsonBuilder.buildStatJson(statsMap, chartType, WFVisJsonBuilder.GroupBy.NODE);
+        String json = statBuilder.build(processes);
 
-        String js = String.format("wfVisRenderChart('%s', %s);", canvasId, json);
-        Clients.evalJavaScript(js);
+        // Chart.js — load jika belum ada, lalu render 3 canvas dalam satu container
+        Clients.evalJavaScript(
+            "(function(){" +
+            "  function r(){" +
+            "    var c=document.getElementById('wfVisContainer');" +
+            "    if(!c){setTimeout(r,300);return;}" +
+            "    if(typeof Chart==='undefined'){" +
+            "      var s=document.createElement('script');" +
+            "      s.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';" +
+            "      s.onload=function(){buildCharts(c);};" +
+            "      document.head.appendChild(s); return;" +
+            "    }" +
+            "    buildCharts(c);" +
+            "  }" +
+            "  function buildCharts(c){" +
+            "    var d=" + json + ";" +
+            // Bersihkan container
+            "    c.innerHTML='';" +
+            "    c.style.overflowY='auto';" +
+            // ── Summary card ──
+            "    var sumDiv=document.createElement('div');" +
+            "    sumDiv.className='wf-stat-summary';" +
+            "    var sm=d.summary;" +
+            "    sumDiv.innerHTML=" +
+            "      '<div class=\"wf-stat-card\"><span class=\"wf-stat-num\">'+sm.totalProcess+'</span><br>Total Instance</div>'" +
+            "     +'<div class=\"wf-stat-card wf-stat-green\"><span class=\"wf-stat-num\">'+sm.completedCount+'</span><br>Selesai</div>'" +
+            "     +'<div class=\"wf-stat-card wf-stat-orange\"><span class=\"wf-stat-num\">'+sm.runningCount+'</span><br>Berjalan</div>'" +
+            "     +'<div class=\"wf-stat-card wf-stat-red\"><span class=\"wf-stat-num\">'+sm.abortedCount+'</span><br>Aborted</div>'" +
+            "     +'<div class=\"wf-stat-card wf-stat-blue\"><span class=\"wf-stat-num\">'+sm.avgTotalDurationMin+' mnt</span><br>Avg Durasi</div>'" +
+            "     +'<div class=\"wf-stat-card wf-stat-dark\"><span class=\"wf-stat-num wf-stat-small\">'+sm.bottleneckNodeName+'</span><br>Bottleneck</div>';" +
+            "    c.appendChild(sumDiv);" +
+            // ── Row charts ──
+            "    var row=document.createElement('div');" +
+            "    row.style.cssText='display:flex;gap:12px;padding:12px;flex-wrap:wrap;';" +
+            "    c.appendChild(row);" +
+            // Bar chart durasi per node
+            "    var divBar=document.createElement('div');" +
+            "    divBar.style.cssText='flex:2;min-width:360px;background:#1E2D3D;border-radius:8px;padding:12px;';" +
+            "    divBar.innerHTML='<p style=\"color:#90A4AE;font-size:12px;margin:0 0 8px\">Avg Durasi per Node (menit)</p>';" +
+            "    var canBar=document.createElement('canvas');" +
+            "    divBar.appendChild(canBar);" +
+            "    row.appendChild(divBar);" +
+            "    var nodeLabels=d.durationPerNode.map(function(x){return x.nodeName;});" +
+            "    var nodeAvgs  =d.durationPerNode.map(function(x){return x.avgMin;});" +
+            "    var nodeColors=d.durationPerNode.map(function(x){return x.isBottleneck?'#D32F2F':'#1976D2';});" +
+            "    new Chart(canBar,{type:'bar'," +
+            "      data:{labels:nodeLabels,datasets:[{label:'Avg Durasi (mnt)',data:nodeAvgs," +
+            "        backgroundColor:nodeColors,borderRadius:4}]}," +
+            "      options:{indexAxis:'y',responsive:true,plugins:{legend:{display:false}," +
+            "        tooltip:{callbacks:{label:function(ctx){return ctx.parsed.x+' mnt ('+d.durationPerNode[ctx.dataIndex].count+'x)';}}}}" +
+            "        ,scales:{x:{ticks:{color:'#90A4AE'},grid:{color:'#263238'}}," +
+            "                  y:{ticks:{color:'#B0BEC5'},grid:{color:'#263238'}}}}});" +
+            // Pie chart status
+            "    var divPie=document.createElement('div');" +
+            "    divPie.style.cssText='flex:1;min-width:220px;background:#1E2D3D;border-radius:8px;padding:12px;';" +
+            "    divPie.innerHTML='<p style=\"color:#90A4AE;font-size:12px;margin:0 0 8px\">Distribusi Status</p>';" +
+            "    var canPie=document.createElement('canvas');" +
+            "    divPie.appendChild(canPie);" +
+            "    row.appendChild(divPie);" +
+            "    new Chart(canPie,{type:'doughnut'," +
+            "      data:{labels:d.statusDist.map(function(x){return x.label;})," +
+            "            datasets:[{data:d.statusDist.map(function(x){return x.value;})," +
+            "              backgroundColor:d.statusDist.map(function(x){return x.color;}),borderWidth:2,borderColor:'#1A2332'}]}," +
+            "      options:{responsive:true,plugins:{legend:{position:'bottom',labels:{color:'#90A4AE',font:{size:11}}}}}});" +
+            // Bar chart throughput
+            "    if(d.throughput.length>0){" +
+            "      var divTp=document.createElement('div');" +
+            "      divTp.style.cssText='flex:2;min-width:360px;background:#1E2D3D;border-radius:8px;padding:12px;';" +
+            "      divTp.innerHTML='<p style=\"color:#90A4AE;font-size:12px;margin:0 0 8px\">Throughput per Minggu</p>';" +
+            "      var canTp=document.createElement('canvas');" +
+            "      divTp.appendChild(canTp);" +
+            "      row.appendChild(divTp);" +
+            "      new Chart(canTp,{type:'bar'," +
+            "        data:{labels:d.throughput.map(function(x){return x.period;})," +
+            "              datasets:[{label:'Jumlah Instance',data:d.throughput.map(function(x){return x.count;})," +
+            "                backgroundColor:'#0288D1',borderRadius:4}]}," +
+            "        options:{responsive:true,plugins:{legend:{display:false}}," +
+            "          scales:{x:{ticks:{color:'#90A4AE'},grid:{color:'#263238'}}," +
+            "                  y:{ticks:{color:'#90A4AE'},grid:{color:'#263238'},beginAtZero:true}}}});" +
+            "    }" +
+            "  }" +
+            "  r();" +
+            "})();"
+        );
 
-        long activeNodes = statsMap.values().stream().filter(n -> n.totalExecutions > 0).count();
-        showStatus("✓ Statistics: " + activeNodes + " node dengan data", "ok");
+        lblStatus.setValue("Statistik: " + processes.size() + " instance dianalisis.");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // POPULATION HELPERS
+    // Event Handler
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void populateWorkflowDropdown() {
-        lbWorkflow.getChildren().clear();
-        lbWorkflow.appendChild(new Listitem("-- Pilih Workflow --", -1));
+    @Override
+    public void onEvent(Event event) throws Exception {
+        Object src  = event.getTarget();
+        String name = event.getName();
 
-        String sql = """
-            SELECT w.AD_Workflow_ID, w.Name
-            FROM AD_Workflow w
-            WHERE w.IsActive = 'Y'
-              AND w.AD_Client_ID IN (0, ?)
-              AND EXISTS (SELECT 1 FROM AD_WF_Node n WHERE n.AD_Workflow_ID = w.AD_Workflow_ID)
-            ORDER BY w.Name
-            """;
-        PreparedStatement pstmt = null;
-        ResultSet rs = null;
-        try {
-            pstmt = DB.prepareStatement(sql, null);
-            pstmt.setInt(1, Env.getAD_Client_ID(Env.getCtx()));
-            rs = pstmt.executeQuery();
-            while (rs.next()) {
-                Listitem li = new Listitem(rs.getString("Name"), rs.getInt("AD_Workflow_ID"));
-                lbWorkflow.appendChild(li);
+        if (src == cbWorkflow && Events.ON_SELECT.equals(name)) {
+            Comboitem sel = cbWorkflow.getSelectedItem();
+            if (sel != null) {
+                adWorkflowID = (Integer) sel.getValue();
+                if (adWorkflowID > 0) loadProcessCombo(adWorkflowID);
             }
-        } catch (SQLException e) {
-            log.warning("populateWorkflowDropdown: " + e.getMessage());
-        } finally {
-            DB.close(rs, pstmt);
         }
-        lbWorkflow.setSelectedIndex(0);
+        else if (src == cbProcess && Events.ON_SELECT.equals(name)) {
+            Comboitem sel = cbProcess.getSelectedItem();
+            if (sel != null) adWFProcessID = (Integer) sel.getValue();
+        }
+        else if (src == chkDefinition) { showDefinition      = chkDefinition.isChecked(); }
+        else if (src == chkActual)     { showActual          = chkActual.isChecked(); }
+        else if (src == chkBottleneck) { highlightBottleneck = chkBottleneck.isChecked(); }
+        else if (src instanceof Button && Events.ON_CLICK.equals(name)) {
+            Button btn = (Button) src;
+            if      (btn == btnFlow)        switchMode(WFVisMode.FLOW);
+            else if (btn == btnComparative) switchMode(WFVisMode.COMPARATIVE);
+            else if (btn == btnTimeline)    switchMode(WFVisMode.TIMELINE);
+            else if (btn == btnStat)        switchMode(WFVisMode.STAT);
+            else                            doRender();  // btnVisualize
+        }
     }
 
-    private void populateProcessDropdown() {
-        lbProcess.getChildren().clear();
-        lbProcess.appendChild(new Listitem("(Semua)", "-1"));
+    private void switchMode(WFVisMode mode) {
+        currentMode = mode;
+        updateModeTabStyle();
+        buildOptionsForMode(mode);
+        buildLegendForMode(mode);
+    }
 
-        if (selectedWorkflowId <= 0) { lbProcess.setSelectedIndex(0); return; }
+    private void updateModeTabStyle() {
+        setTabActive(btnFlow,        currentMode == WFVisMode.FLOW);
+        setTabActive(btnComparative, currentMode == WFVisMode.COMPARATIVE);
+        setTabActive(btnTimeline,    currentMode == WFVisMode.TIMELINE);
+        setTabActive(btnStat,        currentMode == WFVisMode.STAT);
+    }
 
-        String sql = """
-            SELECT p.AD_WF_Process_ID,
-                   p.WFState,
-                   p.Created
-            FROM AD_WF_Process p
-            WHERE p.AD_Workflow_ID = ?
-            ORDER BY p.Created DESC
-            FETCH FIRST 200 ROWS ONLY
-            """;
-        SimpleDateFormat sdf = new SimpleDateFormat("dd/MM/yy HH:mm");
-        PreparedStatement pstmt = null;
-        ResultSet rs = null;
-        try {
-            pstmt = DB.prepareStatement(sql, null);
-            pstmt.setInt(1, selectedWorkflowId);
-            rs = pstmt.executeQuery();
-            while (rs.next()) {
-                String label = "Process #" + rs.getInt("AD_WF_Process_ID")
-                    + " [" + rs.getString("WFState") + "] "
-                    + sdf.format(rs.getTimestamp("Created"));
-                lbProcess.appendChild(
-                    new Listitem(label, String.valueOf(rs.getInt("AD_WF_Process_ID"))));
-            }
-        } catch (SQLException e) {
-            log.warning("populateProcessDropdown: " + e.getMessage());
-        } finally {
-            DB.close(rs, pstmt);
-        }
-        lbProcess.setSelectedIndex(0);
+    private void setTabActive(Button btn, boolean active) {
+        btn.setSclass(active ? "wf-vis-tab wf-vis-tab-active" : "wf-vis-tab");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // UI HELPERS
+    // Lib injection
     // ─────────────────────────────────────────────────────────────────────────
 
-    private void showStatus(String msg, String type) {
-        lblStatus.setValue(msg);
-        lblStatus.setSclass("wfvis-status wfvis-status-" + type);
+    private void injectLibsAndCss() {
+        // CSS
+        Clients.evalJavaScript(
+            "if(!document.getElementById('wf-vis-css')){" +
+            "  var s=document.createElement('style');s.id='wf-vis-css';" +
+            "  s.textContent=`" + WF_VIS_CSS + "`;" +
+            "  document.head.appendChild(s);" +
+            "}"
+        );
+        // vis.js (Network + Timeline dalam satu bundle)
+        Clients.evalJavaScript(
+            "if(typeof vis==='undefined'){" +
+            "  var s=document.createElement('script');" +
+            "  s.src='https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js';" +
+            "  document.head.appendChild(s);" +
+            "  var l=document.createElement('link');l.rel='stylesheet';" +
+            "  l.href='https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css';" +
+            "  document.head.appendChild(l);" +
+            "}"
+        );
+        // Chart.js sudah di-load lazy hanya saat mode STAT dirender
     }
 
-    /** HTML awal untuk container — placeholder sebelum vis.js render */
-    private String buildInitialHtml() {
-        return "<div id=\"" + canvasId + "\" class=\"wfvis-canvas\">" +
-               "<div class=\"wfvis-placeholder\">" +
-               "<span>Pilih workflow dan klik <b>Visualisasi</b></span>" +
-               "</div></div>";
+    // ─────────────────────────────────────────────────────────────────────────
+    // UI helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private Label label(String text) {
+        Label l = new Label(text);
+        l.setSclass("wf-vis-label");
+        return l;
     }
 
-    /**
-     * Script untuk memuat vis.js, vis-timeline, Chart.js secara lazy
-     * dan mendefinisikan fungsi-fungsi wfVisRenderXxx.
-     */
-    private String buildLibraryLoaderScript() {
-        return """
-            (function() {
-              // ── Library loader ─────────────────────────────────────────────
-              function loadScript(src, cb) {
-                if (document.querySelector('script[src="' + src + '"]')) { cb && cb(); return; }
-                var s = document.createElement('script');
-                s.src = src; s.onload = cb;
-                document.head.appendChild(s);
-              }
-              function loadCss(href) {
-                if (document.querySelector('link[href="' + href + '"]')) return;
-                var l = document.createElement('link');
-                l.rel = 'stylesheet'; l.href = href;
-                document.head.appendChild(l);
-              }
-
-              // Load dari CDN (dapat diganti ke local path)
-              loadCss('https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.css');
-              loadScript('https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js', function() {
-                loadScript('https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js', null);
-              });
-
-              // ── Inject CSS ─────────────────────────────────────────────────
-              var style = document.createElement('style');
-              style.textContent = `
-                .wfvis-form           { display:flex; flex-direction:column; height:100%; }
-                .wfvis-north          { padding:8px 12px; background:#F5F5F5; }
-                .wfvis-toolbar-row    { display:flex; align-items:center; gap:8px; flex-wrap:wrap;
-                                        padding:4px 0; }
-                .wfvis-toolbar-row label { font-weight:600; white-space:nowrap; color:#424242; }
-                .wfvis-container      { width:100%; height:100%; }
-                .wfvis-canvas         { width:100%; height:calc(100vh - 200px);
-                                        background:#FAFAFA; border:1px solid #E0E0E0;
-                                        border-radius:4px; position:relative; }
-                .wfvis-placeholder    { position:absolute; top:50%; left:50%;
-                                        transform:translate(-50%,-50%);
-                                        color:#9E9E9E; font-size:16px; }
-                .wfvis-btn-primary    { background:#1565C0; color:#fff; border:none;
-                                        padding:4px 12px; border-radius:3px; cursor:pointer; }
-                .wfvis-btn-secondary  { background:#546E7A; color:#fff; border:none;
-                                        padding:4px 12px; border-radius:3px; cursor:pointer; }
-                .wfvis-status         { font-size:12px; padding:2px 8px; border-radius:3px; }
-                .wfvis-status-ok      { background:#E8F5E9; color:#2E7D32; }
-                .wfvis-status-error   { background:#FFEBEE; color:#C62828; }
-                .wfvis-status-info    { background:#E3F2FD; color:#1565C0; }
-                .wfvis-legend         { position:absolute; top:10px; right:10px;
-                                        background:rgba(255,255,255,0.9);
-                                        border:1px solid #ddd; border-radius:4px;
-                                        padding:8px; font-size:12px; }
-                .wfvis-legend-item    { display:flex; align-items:center; gap:6px; margin:2px 0; }
-                .wfvis-legend-dot     { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
-              `;
-              document.head.appendChild(style);
-
-              // Store per-canvas references
-              window._wfVisInstances = window._wfVisInstances || {};
-              window._chartInstances = window._chartInstances || {};
-
-              // ── wfVisRenderNetwork (Flow & Comparative) ────────────────────
-              window.wfVisRenderNetwork = function(canvasId, data, options) {
-                var container = document.getElementById(canvasId);
-                if (!container) return;
-                container.innerHTML = '';  // clear placeholder & legend
-
-                if (window._wfVisInstances[canvasId]) {
-                  try { window._wfVisInstances[canvasId].destroy(); } catch(e) {}
-                }
-
-                var network = new vis.Network(container,
-                  { nodes: new vis.DataSet(data.nodes),
-                    edges: new vis.DataSet(data.edges) },
-                  options || {});
-                window._wfVisInstances[canvasId] = network;
-              };
-
-              // ── wfVisRenderTimeline ────────────────────────────────────────
-              window.wfVisRenderTimeline = function(canvasId, data, options) {
-                var container = document.getElementById(canvasId);
-                if (!container) return;
-                container.innerHTML = '';
-
-                if (window._wfVisInstances[canvasId]) {
-                  try { window._wfVisInstances[canvasId].destroy(); } catch(e) {}
-                }
-
-                var timeline = new vis.Timeline(container,
-                  new vis.DataSet(data.items),
-                  new vis.DataSet(data.groups),
-                  options || {});
-                window._wfVisInstances[canvasId] = timeline;
-              };
-
-              // ── wfVisRenderChart (Chart.js) ────────────────────────────────
-              window.wfVisRenderChart = function(canvasId, data) {
-                var container = document.getElementById(canvasId);
-                if (!container) return;
-                container.innerHTML = '<canvas id="' + canvasId + '_chart"></canvas>';
-
-                if (window._chartInstances[canvasId]) {
-                  window._chartInstances[canvasId].destroy();
-                }
-
-                var ctx = document.getElementById(canvasId + '_chart').getContext('2d');
-                window._chartInstances[canvasId] = new Chart(ctx, data);
-              };
-
-              // ── wfVisAddLegend ─────────────────────────────────────────────
-              window.wfVisAddLegend = function(canvasId, items) {
-                var container = document.getElementById(canvasId);
-                if (!container) return;
-                var legend = document.createElement('div');
-                legend.className = 'wfvis-legend';
-                items.forEach(function(item) {
-                  var row = document.createElement('div');
-                  row.className = 'wfvis-legend-item';
-                  row.innerHTML = '<div class="wfvis-legend-dot" style="background:' +
-                    item.color + '"></div><span>' + item.label + '</span>';
-                  legend.appendChild(row);
-                });
-                container.appendChild(legend);
-              };
-
-              // ── wfVisFitView ───────────────────────────────────────────────
-              window.wfVisFitView = function(canvasId) {
-                var inst = window._wfVisInstances[canvasId];
-                if (inst && inst.fit) inst.fit({ animation: { duration: 500 } });
-              };
-
-              // ── wfVisExportPng ─────────────────────────────────────────────
-              window.wfVisExportPng = function(canvasId) {
-                var inst = window._wfVisInstances[canvasId];
-                if (inst && inst.getCanvas) {
-                  var url = inst.getCanvas().toDataURL('image/png');
-                  var a = document.createElement('a');
-                  a.href = url; a.download = 'workflow_' + canvasId + '.png';
-                  a.click();
-                }
-              };
-
-            })();
-            """;
+    private Button modeBtn(String text, WFVisMode mode, Div parent) {
+        Button btn = new Button(text);
+        btn.setSclass("wf-vis-tab");
+        btn.addEventListener(Events.ON_CLICK, this);
+        parent.appendChild(btn);
+        return btn;
     }
+
+    private Span legendDot(String color, String label) {
+        Span s = new Span();
+        s.setSclass("wf-legend-item");
+        Span dot = new Span();
+        dot.setStyle("display:inline-block;width:11px;height:11px;" +
+                     "border-radius:2px;background:" + color + ";margin-right:4px;");
+        s.appendChild(dot);
+        s.appendChild(new Label(label));
+        return s;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CSS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private static final String WF_VIS_CSS =
+        // Form wrapper
+        ".wf-visualizer-form{display:flex;flex-direction:column;height:100%;}" +
+        // North
+        ".wf-vis-north{background:#1A2332;border-bottom:1px solid #263238;}" +
+        ".wf-vis-north-inner{padding:8px 12px;gap:4px;}" +
+        ".wf-vis-row{display:flex;align-items:center;gap:10px;padding:4px 0;flex-wrap:wrap;}" +
+        ".wf-vis-label{color:#B0BEC5;font-size:12px;white-space:nowrap;}" +
+        // Mode tabs
+        ".wf-vis-tabs{display:flex;gap:2px;background:#0D1B2A;border-radius:6px;padding:3px;}" +
+        ".wf-vis-tab{background:transparent;color:#78909C;border:none;padding:5px 14px;" +
+        "  border-radius:4px;cursor:pointer;font-size:12px;font-weight:500;transition:all .15s;}" +
+        ".wf-vis-tab:hover{color:#B0BEC5;background:#1E2D3D;}" +
+        ".wf-vis-tab-active{background:#1976D2 !important;color:#fff !important;}" +
+        // Run button
+        ".wf-vis-btn-run{background:#00897B;color:#fff;border:none;" +
+        "  padding:6px 18px;border-radius:4px;cursor:pointer;font-weight:600;font-size:13px;}" +
+        ".wf-vis-btn-run:hover{background:#00695C;}" +
+        // Options sub-row
+        ".wf-vis-options-row{padding:4px 0;}" +
+        ".wf-vis-subopts{gap:16px;padding:4px 0;border-top:1px solid #263238;}" +
+        ".wf-vis-subopts .z-checkbox-cnt{color:#90A4AE;font-size:12px;}" +
+        // Canvas
+        ".wf-vis-canvas{background:#0D1B2A;}" +
+        // South
+        ".wf-vis-south{background:#1A2332;border-top:1px solid #263238;}" +
+        ".wf-vis-south-row{display:flex;align-items:center;gap:14px;padding:0 12px;height:30px;}" +
+        ".wf-vis-status{color:#546E7A;font-size:11px;margin-right:12px;}" +
+        ".wf-vis-legend{display:flex;align-items:center;gap:12px;}" +
+        ".wf-legend-item{display:flex;align-items:center;color:#78909C;font-size:11px;}" +
+        // Stat cards
+        ".wf-stat-summary{display:flex;flex-wrap:wrap;gap:10px;padding:12px;}" +
+        ".wf-stat-card{background:#1E2D3D;border-radius:8px;padding:12px 18px;" +
+        "  color:#90A4AE;font-size:11px;text-align:center;min-width:110px;}" +
+        ".wf-stat-num{color:#ECEFF1;font-size:22px;font-weight:700;display:block;}" +
+        ".wf-stat-small{font-size:13px !important;}" +
+        ".wf-stat-green{border-left:3px solid #66BB6A;}" +
+        ".wf-stat-orange{border-left:3px solid #FFA726;}" +
+        ".wf-stat-red{border-left:3px solid #EF5350;}" +
+        ".wf-stat-blue{border-left:3px solid #29B6F6;}" +
+        ".wf-stat-dark{border-left:3px solid #D32F2F;}";
 }
