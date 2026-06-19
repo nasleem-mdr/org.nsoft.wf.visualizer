@@ -1,37 +1,56 @@
 package org.nsoft.wf.visualizer.model;
 
 import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * WFProcessDTO — satu instance workflow dari AD_WF_Process.
+ * DTO untuk satu instance workflow (AD_WF_Process).
+ * Berisi daftar aktivitas (AD_WF_Activity) yang terjadi pada instance ini.
  */
 public class WFProcessDTO {
-    public int    processId;
-    public int    workflowId;
-    public String wfState;     // AD_WF_Process.WFState: "CC"=Complete, "AD"=Aborted, dll
-    public int    adTableId;
-    public int    recordId;
-    public String documentNo;  // diisi dari join ke dokumen
-    public Timestamp startDate;
-    public Timestamp endDate;
-    public int    userId;
-    public String userName;
 
-    /** Durasi proses dalam menit */
-    public double getDurationMinutes() {
-        if (startDate == null || endDate == null) return 0;
-        return (endDate.getTime() - startDate.getTime()) / 60000.0;
+    private int                  adWFProcessID;
+    private int                  adWorkflowID;
+    private String               wfState;        // status process keseluruhan
+    private Timestamp            created;
+    private String               documentNo;     // nomor dokumen yang sedang diproses
+    private String               tableName;
+    private int                  recordID;
+    private List<WFActivityDTO>  activities = new ArrayList<>();
+
+    public WFProcessDTO(int adWFProcessID, int adWorkflowID, String wfState,
+                        Timestamp created, String documentNo, String tableName, int recordID) {
+        this.adWFProcessID = adWFProcessID;
+        this.adWorkflowID  = adWorkflowID;
+        this.wfState       = wfState;
+        this.created       = created;
+        this.documentNo    = documentNo;
+        this.tableName     = tableName;
+        this.recordID      = recordID;
     }
 
-    /** Label warna berdasarkan state */
-    public String resolveColor() {
-        if (wfState == null) return "#90A4AE";
-        switch (wfState) {
-            case "CC": return "#66BB6A"; // Completed
-            case "AD": return "#EF5350"; // Aborted
-            case "IP": return "#FFA726"; // In Progress
-            case "ST": return "#AB47BC"; // Suspended
-            default:   return "#90A4AE";
+    public int                  getAdWFProcessID() { return adWFProcessID; }
+    public int                  getAdWFWorkflowID(){ return adWorkflowID; }
+    public String               getWfState()       { return wfState; }
+    public Timestamp            getCreated()       { return created; }
+    public String               getDocumentNo()    { return documentNo; }
+    public String               getTableName()     { return tableName; }
+    public int                  getRecordID()      { return recordID; }
+    public List<WFActivityDTO>  getActivities()    { return activities; }
+
+    public void addActivity(WFActivityDTO a) {
+        activities.add(a);
+    }
+
+    /**
+     * Kembalikan set node ID yang sudah dilalui dalam proses ini.
+     */
+    public java.util.Set<Integer> getVisitedNodeIDs() {
+        java.util.Set<Integer> ids = new java.util.HashSet<>();
+        for (WFActivityDTO a : activities) {
+            ids.add(a.getAdWFNodeID());
         }
+        return ids;
     }
 }
